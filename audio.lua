@@ -17,7 +17,9 @@ struct zz_audio_Source {
   struct zz_audio_Source *next;
 };
 
-void zz_audio_Engine_cb(void *userdata, float *stream, int len);
+void zz_audio_Engine_sdl_audio_callback(void *userdata,
+                                        float *stream,
+                                        int len);
 
 struct zz_audio_Mixer {
   struct zz_audio_Source src;
@@ -200,7 +202,7 @@ local function Engine(opts)
    opts = opts or {}
    opts.format = sdl.AUDIO_F32
    opts.channels = 2
-   opts.callback = ffi.C.zz_audio_Engine_cb
+   opts.callback = ffi.C.zz_audio_Engine_sdl_audio_callback
    local mixer = Mixer()
    opts.userdata = mixer.src
    local dev, spec = sdl.OpenAudioDevice(opts)

@@ -10,7 +10,7 @@
 
 #define MIN(x,y) (((x) < (y)) ? (x) : (y))
 
-void zz_audio_Engine_cb(void *userdata, float *stream, int len) {
+void zz_audio_Engine_sdl_audio_callback(void *userdata, float *stream, int len) {
   struct zz_audio_Source *s = (struct zz_audio_Source *) userdata;
   int channels = 2;
   int frames = len / (channels * sizeof(float));
