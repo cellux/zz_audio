@@ -7,30 +7,43 @@ local trigger = require('trigger')
 
 ffi.cdef [[
 
-typedef int (*zz_audio_cb) (void *userdata,
-                            float *stream,
-                            int frames);
+typedef int (*zz_audio_cb) (void *userdata, float *stream, int frames);
 
-struct zz_audio_Source {
+struct zz_audio_Device {
   zz_audio_cb callback;
   void *userdata;
-  struct zz_audio_Source *next;
 };
 
-void zz_audio_Engine_sdl_audio_callback(void *userdata,
-                                        float *stream,
-                                        int len);
+void zz_audio_Device_cb(void *userdata, float *stream, int len) {
+  struct zz_audio_Device *dev = (struct zz_audio_Device *) userdata;
+  int filled = 0;
+  if (dev->callback != NULL) {
+    filled = dev->callback(dev->userdata, stream, len);
+  }
+  if (!filled) {
+    memset(stream, 0, len);
+  }
+}
+
+/* Mixer */
+
+struct zz_audio_MixerChannel {
+  zz_audio_cb callback;
+  void *userdata;
+  struct zz_audio_MixerChannel *next;
+};
 
 struct zz_audio_Mixer {
-  struct zz_audio_Source src;
   SDL_mutex *mutex;
-  float *buf;
+  float *buf; /* temp buffer for output of channels */
+  struct zz_audio_MixerChannel *channels;
 };
 
-int zz_audio_Mixer_cb (void *userdata, float *stream, int frames);
+int zz_audio_Mixer_cb (void *userdata, float *stream, int len);
+
+/* SamplePlayer */
 
 struct zz_audio_SamplePlayer {
-  struct zz_audio_Source src;
   float *buf;
   int frames;
   int channels;
@@ -39,7 +52,7 @@ struct zz_audio_SamplePlayer {
   zz_trigger end_signal;
 };
 
-int zz_audio_SamplePlayer_cb (void *userdata, float *stream, int frames);
+int zz_audio_SamplePlayer_cb (void *userdata, float *stream, int len);
 
 ]]
 
@@ -65,156 +78,117 @@ function M.devices()
    return _next
 end
 
--- Source
-
-local function Source(ct, cb, userdata)
-   -- ct must be a struct type whose first member
-   -- is a struct zz_audio_Source named `src`
-   local source = ffi.new(ct)
-   source.src.callback = cb
-   source.src.userdata = userdata or source
-   source.src.next = nil
-   return source
+function M.Device(opts)
+   opts = opts or {}
+   opts.format = sdl.AUDIO_F32
+   opts.channels = 2
+   opts.callback = ffi.C.zz_audio_Device_cb
+   assert(opts.source, "missing source")
+   opts.userdata = ffi.new("struct zz_audio_Device")
+   opts.userdata.callback = opts.source.callback
+   opts.userdata.userdata = opts.source.userdata
+   local dev = sdl.OpenAudioDevice(opts)
+   if type(opts.source.setup) == "function" then
+      opts.source:setup(dev.spec)
+   end
+   -- dev keeps references to callback, userdata and spec
+   return dev
 end
-
-M.Source = Source
 
 -- Mixer
 
 local Mixer_mt = {}
 
-function Mixer_mt:setup(stream_buffer_size)
-   self.mixer.buf = ffi.C.malloc(stream_buffer_size)
+function Mixer_mt:setup(audio_spec)
+   self.userdata.buf = ffi.C.malloc(audio_spec.size)
 end
 
 function Mixer_mt:lock()
-   util.check_ok("SDL_LockMutex", 0, sdl.SDL_LockMutex(self.mixer.mutex))
+   util.check_ok("SDL_LockMutex", 0, sdl.SDL_LockMutex(self.userdata.mutex))
 end
 
 function Mixer_mt:unlock()
-   util.check_ok("SDL_UnlockMutex", 0, sdl.SDL_UnlockMutex(self.mixer.mutex))
+   util.check_ok("SDL_UnlockMutex", 0, sdl.SDL_UnlockMutex(self.userdata.mutex))
 end
 
 function Mixer_mt:add(source)
-   assert(type(source)=="table")
-   assert(type(source.src)=="cdata")
    assert(not self.sources:contains(source))
-   local src = ffi.cast("struct zz_audio_Source *", source.src)
+   local channel = ffi.new("struct zz_audio_MixerChannel")
+   channel.callback = source.callback
+   channel.userdata = source.userdata
    self:lock()
-   src.next = self.src.next
-   self.src.next = src
+   channel.next = self.userdata.channels
+   self.userdata.channels = channel
    self:unlock()
    self.sources:push(source)
+   self.channels[source] = channel
 end
 
 function Mixer_mt:remove(source)
-   assert(type(source)=="table")
-   assert(type(source.src)=="cdata")
    assert(self.sources:contains(source))
-   local src = ffi.cast("struct zz_audio_Source *", source.src)
-   local cur = self.src
-   while cur.next ~= nil do
-      if cur.next == src then
+   local channel = self.channels[source]
+   assert(channel)
+   local cur, prev = self.userdata.channels, nil
+   while cur ~= nil do
+      if cur == channel then
          self:lock()
-         cur.next = src.next
-         src.next = nil
+         if prev ~= nil then
+            prev.next = cur.next
+         else
+            self.userdata.channels = cur.next
+         end
          self:unlock()
          break
       end
+      prev = cur
       cur = cur.next
    end
    self.sources:remove(source)
+   self.channels[source] = nil
+   -- channel struct will be cleaned up by GC
 end
 
 function Mixer_mt:clear()
    self:lock()
-   self.src.next = nil
+   self.userdata.channels = nil
    self:unlock()
    self.sources:clear()
+   self.channels = {}
 end
 
 function Mixer_mt:delete()
-   if self.mixer.mutex ~= nil then
-      sdl.SDL_DestroyMutex(self.mixer.mutex)
-      self.mixer.mutex = nil
+   if self.userdata.mutex ~= nil then
+      sdl.SDL_DestroyMutex(self.userdata.mutex)
+      self.userdata.mutex = nil
    end
-   if self.mixer.buf ~= nil then
-      ffi.C.free(self.mixer.buf)
-      self.mixer.buf = nil
+   if self.userdata.buf ~= nil then
+      ffi.C.free(self.userdata.buf)
+      self.userdata.buf = nil
    end
-   self.src.next = nil
+   self.userdata.channels = nil
    self.sources:clear()
+   self.channels = {}
 end
 
 Mixer_mt.__index = Mixer_mt
 
 local function Mixer()
-   local mixer = Source("struct zz_audio_Mixer", ffi.C.zz_audio_Mixer_cb)
+   local mixer = ffi.new("struct zz_audio_Mixer")
    mixer.mutex = sdl.SDL_CreateMutex()
    if mixer.mutex == nil then
       ef("SDL_CreateMutex() failed")
    end
-   mixer.buf = nil
+   mixer.buf = nil -- will be created during setup
    local self = {
-      mixer = mixer,
-      src = mixer.src,
+      callback = ffi.C.zz_audio_Mixer_cb,
+      userdata = mixer,
       sources = adt.Set(),
+      channels = {},
    }
    return setmetatable(self, Mixer_mt)
 end
 
 M.Mixer = Mixer
-
--- Engine
-
-local Engine_mt = {}
-
-function Engine_mt:add(source)
-   self.mixer:add(source)
-end
-
-function Engine_mt:remove(source)
-   self.mixer:remove(source)
-end
-
-function Engine_mt:clear()
-   self.mixer:clear()
-end
-
-function Engine_mt:start()
-   self.dev:start()
-end
-
-function Engine_mt:stop()
-   self.dev:stop()
-end
-
-function Engine_mt:delete()
-   self:stop()
-   self:clear()
-   self.mixer:delete()
-   self.dev:close()
-end
-
-Engine_mt.__index = Engine_mt
-
-local function Engine(opts)
-   opts = opts or {}
-   opts.format = sdl.AUDIO_F32
-   opts.channels = 2
-   opts.callback = ffi.C.zz_audio_Engine_sdl_audio_callback
-   local mixer = Mixer()
-   opts.userdata = mixer.src
-   local dev, spec = sdl.OpenAudioDevice(opts)
-   mixer:setup(spec.size)
-   local self = {
-      dev = dev,
-      mixer = mixer,
-   }
-   return setmetatable(self, Engine_mt), spec
-end
-
-M.Engine = Engine
 
 -- SamplePlayer
 
@@ -222,9 +196,9 @@ local SamplePlayer_mt = {}
 
 function SamplePlayer_mt:playing(state)
    if state then
-      self.player.playing = state
+      self.userdata.playing = state
    end
-   return self.player.playing
+   return self.userdata.playing
 end
 
 function SamplePlayer_mt:play()
@@ -239,15 +213,15 @@ end
 function SamplePlayer_mt:lseek(offset, whence)
    local new_pos
    if whence == ffi.C.SEEK_CUR then
-      new_pos = self.player.pos + offset
+      new_pos = self.userdata.pos + offset
    elseif whence == ffi.C.SEEK_SET then
       new_pos = offset
    elseif whence == ffi.C.SEEK_END then
-      new_pos = self.player.frames - offset
+      new_pos = self.userdata.frames - offset
    end
-   if new_pos >= 0 and new_pos <= self.player.frames then
+   if new_pos >= 0 and new_pos <= self.userdata.frames then
       -- TODO: this should be atomic
-      self.player.pos = new_pos
+      self.userdata.pos = new_pos
    end
 end
 
@@ -269,7 +243,7 @@ SamplePlayer_mt.__index = SamplePlayer_mt
 
 function M.SamplePlayer(opts)
    opts = opts or {}
-   local player = Source("struct zz_audio_SamplePlayer", ffi.C.zz_audio_SamplePlayer_cb)
+   local player = ffi.new("struct zz_audio_SamplePlayer")
    player.buf = opts.buf
    player.frames = opts.frames
    player.channels = opts.channels
@@ -278,8 +252,8 @@ function M.SamplePlayer(opts)
    local end_signal = trigger()
    player.end_signal = end_signal
    local self = {
-      player = player,
-      src = player.src,
+      callback = ffi.C.zz_audio_SamplePlayer_cb,
+      userdata = player,
       buf = opts.buf, -- keep a reference to prevent GC
       frames = tonumber(opts.frames),
       channels = opts.channels,
