@@ -14,16 +14,7 @@ struct zz_audio_Device {
   void *userdata;
 };
 
-void zz_audio_Device_cb(void *userdata, float *stream, int len) {
-  struct zz_audio_Device *dev = (struct zz_audio_Device *) userdata;
-  int filled = 0;
-  if (dev->callback != NULL) {
-    filled = dev->callback(dev->userdata, stream, len);
-  }
-  if (!filled) {
-    memset(stream, 0, len);
-  }
-}
+void zz_audio_Device_cb(void *userdata, float *stream, int len);
 
 /* Mixer */
 
