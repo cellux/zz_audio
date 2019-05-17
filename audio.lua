@@ -7,14 +7,14 @@ local trigger = require('trigger')
 
 ffi.cdef [[
 
-typedef int (*zz_audio_cb) (void *userdata, float *stream, int frames);
+typedef int (*zz_audio_cb) (void *userdata, float *stream, int nbytes);
 
 struct zz_audio_Device {
   zz_audio_cb callback;
   void *userdata;
 };
 
-void zz_audio_Device_cb(void *userdata, float *stream, int len);
+void zz_audio_Device_cb(void *userdata, float *stream, int nbytes);
 
 /* Mixer */
 
@@ -30,7 +30,7 @@ struct zz_audio_Mixer {
   struct zz_audio_MixerChannel *channels;
 };
 
-int zz_audio_Mixer_cb (void *userdata, float *stream, int len);
+int zz_audio_Mixer_cb (void *userdata, float *stream, int nbytes);
 
 /* SamplePlayer */
 
@@ -43,7 +43,7 @@ struct zz_audio_SamplePlayer {
   zz_trigger end_signal;
 };
 
-int zz_audio_SamplePlayer_cb (void *userdata, float *stream, int len);
+int zz_audio_SamplePlayer_cb (void *userdata, float *stream, int nbytes);
 
 ]]
 

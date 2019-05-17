@@ -15,11 +15,11 @@ struct zz_audio_Device {
   void *userdata;
 };
 
-void zz_audio_Device_cb(void *userdata, float *stream, int len) {
+void zz_audio_Device_cb(void *userdata, float *stream, int nbytes) {
   struct zz_audio_Device *dev = (struct zz_audio_Device *) userdata;
-  int filled = dev->callback(dev->userdata, stream, len);
+  int filled = dev->callback(dev->userdata, stream, nbytes);
   if (!filled) {
-    memset(stream, 0, len);
+    memset(stream, 0, nbytes);
   }
 }
 
@@ -35,19 +35,19 @@ struct zz_audio_Mixer {
   struct zz_audio_MixerChannel *channels;
 };
 
-int zz_audio_Mixer_cb (void *userdata, float *stream, int len) {
+int zz_audio_Mixer_cb (void *userdata, float *stream, int nbytes) {
   struct zz_audio_Mixer *mixer = (struct zz_audio_Mixer *) userdata;
   if (!mixer->channels) return 0;
-  memset(stream, 0, len);
+  memset(stream, 0, nbytes);
   if (SDL_LockMutex(mixer->mutex) != 0) {
     fprintf(stderr, "zz_audio_Mixer_cb: SDL_LockMutex() failed\n");
     exit(1);
   }
   struct zz_audio_MixerChannel *ch = mixer->channels;
   while (ch != NULL) {
-    int filled = ch->callback(ch->userdata, mixer->buf, len);
+    int filled = ch->callback(ch->userdata, mixer->buf, nbytes);
     if (filled) {
-      int n = len / sizeof(float);
+      int n = nbytes / sizeof(float);
       for (int i=0; i<n; i++) {
         stream[i] += mixer->buf[i];
       }
@@ -70,9 +70,9 @@ struct zz_audio_SamplePlayer {
   zz_trigger end_signal; /* triggered at end of sample */
 };
 
-int zz_audio_SamplePlayer_cb (void *userdata, float *stream, int len) {
+int zz_audio_SamplePlayer_cb (void *userdata, float *stream, int nbytes) {
   struct zz_audio_SamplePlayer *player = (struct zz_audio_SamplePlayer *) userdata;
-  int frames = len / (2 * sizeof(float));
+  int frames = nbytes / (2 * sizeof(float));
   if (player->pos < 0) player->pos = 0;
   if (player->pos > player->frames) player->pos = player->frames;
   if (player->playing != 0 && player->pos == player->frames) {
