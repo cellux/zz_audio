@@ -1,5 +1,4 @@
 local ffi = require('ffi')
-local adt = require('adt')
 local sdl = require('sdl2')
 local util = require('util')
 local sched = require('sched')
@@ -173,7 +172,7 @@ local function Mixer()
    local self = {
       callback = ffi.C.zz_audio_Mixer_cb,
       userdata = mixer,
-      sources = adt.Set(),
+      sources = util.Set(),
       channels = {},
    }
    return setmetatable(self, Mixer_mt)
