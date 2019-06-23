@@ -193,7 +193,7 @@ end
 
 function SamplePlayer_mt:play()
    self:playing(1)
-   return self.end_signal -- caller may poll it if needed
+   return self.end_signal -- caller may wait on it if needed
 end
 
 function SamplePlayer_mt:pause()
